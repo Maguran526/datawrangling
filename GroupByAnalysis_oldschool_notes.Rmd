@@ -1,0 +1,512 @@
+---
+title: "Group by analysis - traditional approach"
+output:
+  html_document:
+    toc: yes
+    toc_float: true
+    toc_depth: 2
+---
+
+Group by analysis
+========================================================
+
+Exploratory data analysis (EDA) is more of a "state of mind" than a formal
+process. The primary goal of EDA is to gain an understanding of your data and
+how it might relate to the questions you hope to answer. One of the fundamental
+techniques of EDA is what I usually call "group by analysis". Think of Excel
+pivot tables. Doing counts, sums and other aggregate statistics while grouping
+by one or more other variables is a great way to start to explore your data.
+
+## Preliminaries ##
+
+Either create a new R Project or at least set your working directory to the 
+location of the folder for the extracted Download file.
+
+## Analysis background ##
+
+We'll use the same NYC Condo data that we used in the first EDA session to 
+start our look at doing *group by* analysis in R. 
+
+Load the `housing.rdata` file included in the downloads.
+
+```{r readhousing}
+load("data/housing.rdata")
+str(housing)
+```
+
+In data model terms, the Neighborhood, Class and Boro variables are dimensions
+and the rest are measures. In R, a dimension is called a *factor* and each
+unique value of a factor is called a *level*. Of course, we could certainly use
+things like SQL or Excel Pivot Tables to do very useful things with this data.
+However, here we will start to see how R can be used to do the same things as
+well as to do some things that are much more difficult using SQL or Excel.
+
+Load libraries that we'll need.
+
+```{r libraries}
+library(plyr)      # A library for data summarization and transformation
+library(ggplot2)   # A library for plotting
+```
+ 
+## The Hadleyverse - a preview
+
+Both **plyr** and **ggplot2** are R libraries created by [Hadley
+Wickham](http://had.co.nz/). He is a prolific developer of useful R packages,
+teaches at Rice University, and is the Chief Scientist at [R
+Studio](https://www.rstudio.com/). HW has been extraordinarily influential in
+the R community as has R Studio. So much so that many began to refer to the
+collection of R packages developed by HW and his colleagues/collaborators as the
+*Hadleyverse*. These include:
+
+* plyr - group by analysis
+* reshape2 - data reshaping and transforming
+* ggplot2 - plotting
+* tidyr - getting your data tidied up for analysis
+* stringr - easier and better string manipulation
+* lubridate - easier and better date/time manipulation
+* dplyr - next generation group by analysis, data selection, data transformation
+* broom - tidy your model results
+* purrr - easier iteration
+* tibble - a better data frame
+* modelr - makes models pipeable
+
+A common feature of working in the Hadleyverse is the use of the *pipe operator*
+introduced in the 
+[magrittr](https://cran.r-project.org/web/packages/magrittr/vignettes/magrittr.html)
+package. This allows commands to be chained together and is reminiscent of the 
+Unix "|". The Hadleyverse itself continues to evolve and once new tools like 
+**plyr** and **reshape2** are now being challenged by newcomers **dplyr** and
+**tidyr**. HW and R Studio have even released an R package they are calling the 
+**tidyverse** that bundles together many of these tools. Before diving into the 
+**tidyverse**, we are going to:
+
+* explore the *split-apply-combine* framework for understanding how group by
+analysis works,
+* use the "old school" `apply` family of functions to do group by analysis,
+* use an early HW creation known as **plyr** which was developed to try to make
+group by analysis easier.
+
+## Split-Apply-Combine
+
+The **plyr** library implements what is known as the Split-Apply-Combine model
+for data summarization. A great little paper is available from the **plyr**
+website at http://plyr.had.co.nz/.
+
+A general approach to “Group By” analysis
+
+* Split data into groups via some dimension
+* Apply some sort of transformation or aggregation to each group
+* Combine all the pieces back together
+
+Common transformations and aggregations
+
+* Log transform as prelude to linear regression modeling 
+* Sum, mean, sd, quantile, min, max
+* “With great power comes great responsibility”
+    - User defined functions
+    - Anonymous (lambda) functions
+
+*Split*
+
+```{r}
+knitr::include_graphics('images/split.png')
+```
+
+
+*Apply and Combine*
+
+```{r}
+knitr::include_graphics('images/apply_combine.png')
+```
+
+
+## Quick summary of data ##
+
+```{r summary}
+summary(housing)
+```
+
+We saw last time that YearBuilt has some missing values.
+
+## Add another computed field 
+
+Create an age field based on the current year and the YearBuilt field. 
+We expect that the NAs will propogate and we'll have Age values of 
+NA whenever YearBuilt is NA.
+
+```{r add_age}
+housing$Age <- 2014 - housing$YearBuilt
+housing[is.na(housing$YearBuilt),c("YearBuilt","Age")] # What is this doing?
+```
+
+## Analysis ##
+
+We will start with basic group by analysis similar to what you might 
+do with an Excel Pivot Table. Then we'll
+do some analysis that cannot be done via Pivot Tables. We'll throw some 
+basic plotting in as well to serve as a review from last time.
+ 
+### Group By summaries using *apply* family 
+
+R has a family of functions called the *apply* family. They are designed when 
+you want to apply some sort of function (either a built in function or a udf) 
+repeatedly to some subset of data. There a bunch of apply functions and it can 
+be difficult to remember the nuances of each. Good introductory overviews
+include:
+
+ - [http://nsaunders.wordpress.com/2010/08/20/a-brief-introduction-to-apply-in-r/](http://nsaunders.wordpress.com/2010/08/20/a-brief-introduction-to-apply-in-r/)
+ - [http://www.r-bloggers.com/say-it-in-r-with-by-apply-and-friends/](http://www.r-bloggers.com/say-it-in-r-with-by-apply-and-friends/)
+
+Let's compute the counts, mean and standard deviation of ValuePerSqFt by Boro.
+We'll use the **tapply** function. According to **help(tapply)**:
+
+    Apply a function to each cell of a ragged array, that is to each (non-empty) group of values given by a unique combination of the levels of certain factors.
+
+The "ragged array" refers to the fact that the number of rows for each level of
+some factor might be different. In this example, there are likely a different
+number of cases for each value of the Boro column (a factor).
+
+So, the typical usage for `tapply` is to pass in:
+
+* the vector on which you want to do some math,
+* a list of one or more factors to group by, 
+* and a function to apply to do the math. 
+
+Let's start with a few basic examples.
+
+**Count of ValuePerSqFt by Boro**
+
+```{r count_by_boro}
+tapply(housing$ValuePerSqFt, housing$Boro, length)
+```
+
+**Mean of ValuePerSqFt by Boro**
+
+```{r mean_by_boro}
+tapply(housing$ValuePerSqFt, housing$Boro, mean)
+```
+
+**Mean(ValuePerSqFt) by Boro and store result in an array**
+
+```{r store_result}
+meansby_boro <- tapply(housing$ValuePerSqFt, housing$Boro,mean)
+class(meansby_boro)
+str(meansby_boro)
+meansby_boro
+```
+
+**Standard deviation of ValuePerSqFt by Urgency**
+
+```{r sd_by_urgency}
+tapply(housing$ValuePerSqFt, housing$Boro, sd)
+```
+
+
+What happens if we try to compute the mean of a column having NA values in it?
+
+```{r meanwna}
+tapply(housing$Age, housing$Boro, mean)
+```
+
+Check out the help for the `mean` function and remedy this problem.
+Do something so that `tapply` doesn't return NA for mean Age by Boro.
+
+```{r meanwna_fix}
+tapply(housing$Age, housing$Boro, mean, na.rm=TRUE)
+```
+
+How are NAs treated in terms of counts?
+
+```{r countwna}
+# Do two tapply's so that you can see how NAs are treated for counts
+# tapply(for a field with NAs)
+tapply(housing$Age, housing$Boro, length)
+
+# tapply(for a field without NAs)
+tapply(housing$Units, housing$Boro, length)
+```
+
+What if you want to compute means after grouping by two factors? Well, `tapply` 
+will take a list of factors as the INDEX argument.
+
+```{r twofactors}
+tapply(housing$ValuePerSqFt, list(housing$Boro,housing$Class), mean)
+```
+
+What happens if we try three factors? Well first of all we don't 
+really have a great third factor to group by since Neighborhood is 
+Boro specific. Let's create an age class variable. R has a function
+called `cut` which converts a numeric vector into a factor 
+based on a vector of "breaks". Let's just do a `help(cut)`. We better check 
+out the range of Age.
+
+```{r age_range}
+summary(housing$Age)
+```
+
+Ok, let's create an AgeClass factor with breaks every 25 years. 
+
+**Question** How could you create a vector containing 0,25,50,75,...,200?
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r ageclass_breaks}
+ageclass_breaks <- 0:8*25
+```
+
+Now, use `cut` to create our new factor.
+
+```{r ageclass_cut}
+housing$AgeClass <- cut(housing$Age, ageclass_breaks)
+```
+
+Finally, use `tapply` with three factors:
+
+```{r three_factors}
+tapply(housing$ValuePerSqFt,
+       list(housing$Boro,housing$AgeClass,housing$Class),
+       length)
+```
+
+The results of `tapply` are generally arrays. What if we want a data frame with
+the factors appearing as columns? This is a job for the `aggregate` function.
+Many ways to use `aggregate` - see Section 11.2 in RforE and `help(aggregate)`.
+Here's one way to use it:
+
+```{r agg1a}
+agg1a <- aggregate(housing$ValuePerSqFt,
+                   list(housing$Boro, housing$Class),
+                   mean)
+str(agg1a)
+agg1a
+```
+
+You'll see that the result is a `data.frame` with default columns names of 
+Group.1 and Group.2. Of course, we can fix the names ourselves.
+
+```{r agg1a_fixnames}
+names(agg1a) <- c("Borough","CondoClass","ValuePerSqFt")
+str(agg1a)
+```
+
+Here's the same thing written using formula notation.
+
+```{r agg1b}
+aggregate(ValuePerSqFt ~ Boro + Class, housing, mean)
+```
+
+Notice now that we get nice column headers in the resultant data frame. 
+What if we wanted to compute the mean for both ValuePerSqFt and SqFt? 
+Well R has ways to "bind" row or column vectors using the functions `rbind` and 
+`cbind`, respectively. So, we can do this:
+
+```{r agg1c}
+aggregate(cbind(ValuePerSqFt,SqFt) ~ Boro + Class, housing, mean)
+```
+
+If you use `help(aggregate)` you'll start to see some of the complexity of R. 
+
+Check out [http://nsaunders.wordpress.com/2010/08/20/a-brief-introduction-to-apply-in-r/](http://nsaunders.wordpress.com/2010/08/20/a-brief-introduction-to-apply-in-r/) for more on these and related functions in the apply family.
+
+### Using `plyr` for group wise analysis
+
+While `tapply` and friends are great, they can be a bit confusing. The **plyr** 
+package was designed to make it easier to do this type of analysis. Check out 
+the highlights at [http://plyr.had.co.nz/](http://plyr.had.co.nz/) and Section
+11.3 of RforE. One way that `plyr` is easier to use the `apply` functions is
+that **plyr** uses a common naming convention that specifies the type of input
+data structure and the type of output data structure. So, if have a data frame
+and you want a data frame as output, you use `ddply`. If you wanted an array as
+output you'd use `daply`. Again, check out the [article on 
+Split-Apply-Combine](http://www.jstatsoft.org/v40/i01) that is the basis for 
+**plyr** to get all the details.
+
+The `summarise` function (in **plyr**) summarizes a field over entire data set 
+(i.e. no grouping fields). Result of following is 1 x 6.
+
+```{r summarize}
+summarise(housing, 
+          mean_vpsf = mean(ValuePerSqFt),
+          sd_vpsf = sd(ValuePerSqFt),
+          min_vpsf = min(ValuePerSqFt),
+          p05_vpsf = quantile(ValuePerSqFt,0.05),
+          p95_vpsf = quantile(ValuePerSqFt,0.95),
+          max_vpsf = max(ValuePerSqFt))
+```
+
+The above isn't super useful but shows how to do a basic summary of a field 
+in a data frame. Of course, you can use your own custom functions as well. 
+The `summarise` function will get used in other **plyr** commands shortly. 
+
+```{r plyr_stats_by_boro}
+## Count of ValuePerSqFt by Boro
+ddply(housing,"Boro", summarise, numcondos=length(ValuePerSqFt))
+
+## A variant of above but using the special "dot" function so that the splitting variables can
+## be referenced directly by name without quotes.
+ddply(housing, .(Boro), summarise, numcondos=length(ValuePerSqFt))
+
+## Mean of ValuePerSqFt by Boro
+ddply(housing, .(Boro), summarise, mean_vpsf=mean(ValuePerSqFt))
+
+## Std dev of ValuePerSqFt by Boro
+ddply(housing, .(Boro), summarise, sd_vpsf=sd(ValuePerSqFt))
+
+## Now let's do mean vpsf with counts by Boro and AgeClass
+ddply(housing, .(Boro,AgeClass), summarise, 
+      mean_vpsf=mean(ValuePerSqFt), 
+      numcondos=length(ValuePerSqFt))
+```
+
+Anything interesting pop out of the queries above?
+
+This is just a very, very brief peek into to `plyr` and data summarization in R.
+Way more complex stuff can be done. For example, we aren't restricted to using
+built in function such as `mean` - we can write and use our own functions. In
+Section 11.3.1 of RforE, you can work through a very nice Major League Baseball
+related example in which they create a udf (user defined function) to compute On
+Base Percentage (OBP) and then use it inside of `ddply` to compute OBP for each
+player over their entire career. I urge you to work through this example closely
+as you'll learn a lot.
+
+I've created a few tutorials on my hselab.org site that cover use of `plyr` for
+group by analysis:
+
+- [Getting started with R (with plyr and ggplot2) for group by analysis](http://hselab.org/getting-started-R-group-by.html)
+- [Using R instead of Excel for analyzing recovery room data](http://hselab.org/using-r-instead-of-excel-for-analyzing-recovery-room-data.html)
+- [Create sequence of ggplots and send to pdf](http://hselab.org/sequence-ggplot-to-pdf.html)
+
+Practice challenge
+------------------
+
+Why don't we do something that is not easy to do using SQL or Excel Pivot Tables or Tableau. Let's compute the 95th percentile of Units by Boro and Class.
+
+```{r pctile}
+ddply(housing,.(Boro,Class), summarise, p95_units = quantile(Units,0.95))
+
+```
+
+Now a short challenge for you. Instead of grouping by Boro and Class, now let's
+do it by AgeClass. In addition to reporting the 95th percentile , report the
+count. Then add a bar chart based on the counts of cases by age class.
+
+Hints: 
+
+- Your bar chart is based on the results of your ddply command.
+- ggplot(data=????, aes(x=???, y=???)) + ????
+
+```{r}
+df_ageclass_summary <- ddply(housing,.(AgeClass),summarise,p95_units=quantile(Units,0.95),n_units=length(Units))
+
+ggplot(data=df_ageclass_summary, aes(x=AgeClass, y=n_units)) + geom_bar(stat="identity")
+```
+
+Next steps
+----------
+
+Since housing has changed, let's save a new version so we can reuse AgeClass again later.
+```{r}
+save(housing,file="NYCcondos/data/housing2.rdata")
+```
+
+Even within R, there are several other ways of doing this type of analysis. 
+
+* [sqldf](https://cran.r-project.org/web/packages/sqldf/sqldf.pdf) lets you execute SQL statements in R.  
+* [data.table](http://datatable.r-forge.r-project.org/) is an enhancement to data frames
+that also supports group by analysis
+* [dplyr]() is the next incarnation of **plyr**
+
+There appears to be quite an [ongoing vigorous debate in SO](https://stackoverflow.com/questions/21435339/data-table-vs-dplyr-can-one-do-something-well-the-other-cant-or-does-poorly) about the relative merits
+of **data.table** and **dplyr**.
+
+The **data.table** package (see Section 11.4 in RforE) is an enhanced version
+of a `data.frame` that uses indexes to speed up data manipulation on large
+datasets. It also strives to have a consistent syntax for data manipulation. It
+definitely gets used in the R world though I've mostly stuck to the 
+`apply` family, `plyr`, and now `dplyr`. Feel free to give it a whirl.
+
+The **dplyr** package was released a few years ago by Hadley Wickham. An
+outstanding "getting started" tutorial was created by David Markham -
+[Introduction to dplyr for Faster Data Manipulation in 
+R](https://rpubs.com/justmarkham/dplyr-tutorial). It does a really nice job of 
+introducing **dplyr** using the `flights` data.
+
+You'll also learn a little about
+the **magrittr** package and its pipe operator `%>%`. For example, compare the
+following two approaches to computing Euclidean distance between two vectors:
+
+```{r}
+# create two vectors and calculate Euclidian distance between them
+x1 <- 1:5; x2 <- 2:6
+sqrt(sum((x1-x2)^2))
+```
+
+Let's load the **dplyr** library
+
+```{r}
+library(dplyr)
+```
+
+```{r}
+# chaining method
+(x1-x2)^2 %>% 
+  sum() %>% 
+  sqrt()
+```
+
+**Question** How might you describe what the `%>%` does?
+
+The pipe operator allows very natural chained group by analysis to be done.
+
+Here's a typical **plyr** statement
+
+```{r}
+## Now let's do mean vpsf with counts by Boro and AgeClass
+ddply(housing, .(Boro,AgeClass), summarise, 
+      mean_vpsf=mean(ValuePerSqFt), 
+      numcondos=length(ValuePerSqFt))
+```
+
+Compare that to the **dplyr** approach.
+
+```{r}
+housing %>%
+    group_by(Boro, AgeClass) %>%
+    summarise(mean_vpsf = mean(ValuePerSqFt), 
+              numcondos = n())
+```
+
+In the next tutorial we'll explore **dplyr** more thoroughly.
+
+**Important Note** If you are working with both **plyr** and **dplyr** in
+the same session, you should load **plyr** first. The library loaded *last*
+will take precedence if there are two functions with the same number; e.g.
+`summarize`. If you need to call a function specifically from a package, you
+can always do `plyr::summarize` or `dplyr::summarize` to make sure you 
+are getting the function you desire.
+
+
+
+
+
+
+
